@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import tasks
 import openai
 import json
 import random
@@ -7,7 +7,7 @@ import os
 import aiohttp
 from keep_alive import keep_alive
 
-# Load API keys from Render environment variables
+# Load API keys from environment variables
 openai.api_key = os.getenv("OPENAI_API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
@@ -17,9 +17,17 @@ intents.messages = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class AIClient(discord.Client):
+    def __init__(self):
+        super().__init__(intents=intents)
+        self.tree = discord.app_commands.CommandTree(self)
 
-# === Load/Save server AI toggle ===
+    async def setup_hook(self):
+        # Sync commands globally (or per guild for testing)
+        await self.tree.sync()
+
+bot = AIClient()
+
 def load_enabled_servers():
     try:
         with open("enabled_servers.json", "r") as f:
@@ -31,52 +39,50 @@ def save_enabled_servers(server_ids):
     with open("enabled_servers.json", "w") as f:
         json.dump({"enabled": server_ids}, f, indent=4)
 
-# === Bot Ready ===
 @bot.event
 async def on_ready():
     print(f"✅ {bot.user} is online!")
     auto_responder.start()
 
-# === /enable-ai command ===
-@bot.slash_command(name="enable-ai", description="Enable AI features in this server")
-@commands.has_permissions(manage_guild=True)
-async def enable_ai(ctx):
+@bot.tree.command(name="enable-ai", description="Enable AI features in this server")
+@discord.app_commands.checks.has_permissions(manage_guild=True)
+async def enable_ai(interaction: discord.Interaction):
     enabled = load_enabled_servers()
-    if str(ctx.guild.id) not in enabled:
-        enabled.append(str(ctx.guild.id))
+    guild_id = str(interaction.guild.id)
+    if guild_id not in enabled:
+        enabled.append(guild_id)
         save_enabled_servers(enabled)
-        await ctx.respond("✅ AI features enabled!")
+        await interaction.response.send_message("✅ AI features enabled!", ephemeral=True)
     else:
-        await ctx.respond("⚠️ AI is already enabled.")
+        await interaction.response.send_message("⚠️ AI is already enabled.", ephemeral=True)
 
-# === /disable-ai command ===
-@bot.slash_command(name="disable-ai", description="Disable AI features in this server")
-@commands.has_permissions(manage_guild=True)
-async def disable_ai(ctx):
+@bot.tree.command(name="disable-ai", description="Disable AI features in this server")
+@discord.app_commands.checks.has_permissions(manage_guild=True)
+async def disable_ai(interaction: discord.Interaction):
     enabled = load_enabled_servers()
-    if str(ctx.guild.id) in enabled:
-        enabled.remove(str(ctx.guild.id))
+    guild_id = str(interaction.guild.id)
+    if guild_id in enabled:
+        enabled.remove(guild_id)
         save_enabled_servers(enabled)
-        await ctx.respond("❌ AI features disabled.")
+        await interaction.response.send_message("❌ AI features disabled.", ephemeral=True)
     else:
-        await ctx.respond("⚠️ AI is already disabled.")
+        await interaction.response.send_message("⚠️ AI is already disabled.", ephemeral=True)
 
-# === /meme command (AI-generated image) ===
-@bot.slash_command(name="meme", description="Generate a meme image from recent messages")
-async def meme(ctx):
-    if str(ctx.guild.id) not in load_enabled_servers():
-        return await ctx.respond("⚠️ AI is disabled in this server.")
+@bot.tree.command(name="meme", description="Generate a meme image from recent messages")
+async def meme(interaction: discord.Interaction):
+    guild_id = str(interaction.guild.id)
+    if guild_id not in load_enabled_servers():
+        return await interaction.response.send_message("⚠️ AI is disabled in this server.", ephemeral=True)
 
-    messages = [m async for m in ctx.channel.history(limit=10)]
+    messages = [m async for m in interaction.channel.history(limit=10)]
     recent = [m.content for m in messages if not m.author.bot]
     if not recent:
-        return await ctx.respond("No usable messages found.")
+        return await interaction.response.send_message("No usable messages found.", ephemeral=True)
 
     prompt = "Create a funny meme image idea based on this chat:\n" + "\n".join(recent)
 
-    await ctx.respond("🧠 Generating meme...")
+    await interaction.response.defer()  # Acknowledge and thinking...
 
-    # Generate meme image with DALL·E
     try:
         response = openai.Image.create(
             model="dall-e-3",
@@ -92,18 +98,18 @@ async def meme(ctx):
                     img_data = await resp.read()
                     with open("meme.png", "wb") as f:
                         f.write(img_data)
-                    await ctx.send(file=discord.File("meme.png"))
+                    await interaction.followup.send(file=discord.File("meme.png"))
                 else:
-                    await ctx.send("❌ Failed to download meme image.")
+                    await interaction.followup.send("❌ Failed to download meme image.")
     except Exception as e:
-        await ctx.send(f"⚠️ Error: {str(e)}")
+        await interaction.followup.send(f"⚠️ Error: {str(e)}")
 
-# === Auto AI reply every minute (optional) ===
 @tasks.loop(seconds=60)
 async def auto_responder():
     await bot.wait_until_ready()
     for guild in bot.guilds:
-        if str(guild.id) not in load_enabled_servers():
+        guild_id = str(guild.id)
+        if guild_id not in load_enabled_servers():
             continue
         for channel in guild.text_channels:
             try:
@@ -118,11 +124,8 @@ async def auto_responder():
                     )
                     await channel.send(reply.choices[0].message.content)
                     break
-            except:
+            except Exception:
                 continue
 
-# === Start webserver to keep bot alive ===
 keep_alive()
-
-# Run bot
 bot.run(DISCORD_TOKEN)
