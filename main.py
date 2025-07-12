@@ -1,107 +1,63 @@
-import discord from discord.ext import tasks from discord.commands import SlashCommandGroup import openai import random import os import asyncio from dotenv import load_dotenv
+import discord from discord.ext import tasks from discord.commands import slash_command, Option import openai import os import random import json import asyncio
 
-Load environment variables
-
-load_dotenv() TOKEN = os.getenv("DISCORD_TOKEN") OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-openai.api_key = OPENAI_API_KEY
-
-intents = discord.Intents.default() intents.messages = True intents.guilds = True intents.message_content = True intents.members = True
+intents = discord.Intents.default() intents.messages = True intents.guilds = True intents.message_content = True
 
 bot = discord.Bot(intents=intents)
 
-enabled_servers = set()
+Environment Variables
 
-Slash command group
+TOKEN = os.getenv("DISCORD_TOKEN") OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") openai.api_key = OPENAI_API_KEY
 
-ai_group = SlashCommandGroup("ai", "AI-related commands")
+File to store enabled server IDs
 
-@ai_group.command(name="enable", description="Enable AI features in this server") async def enable_ai(ctx): enabled_servers.add(ctx.guild.id) await ctx.respond("✅ AI features enabled in this server.")
+ENABLED_SERVERS_FILE = "enabled_servers.json"
 
-@ai_group.command(name="disable", description="Disable AI features in this server") async def disable_ai(ctx): enabled_servers.discard(ctx.guild.id) await ctx.respond("🛑 AI features disabled in this server.")
+def load_enabled_servers(): if os.path.exists(ENABLED_SERVERS_FILE): with open(ENABLED_SERVERS_FILE, "r") as f: return json.load(f) return []
 
-@ai_group.command(name="status", description="Check if AI is enabled") async def status_ai(ctx): if ctx.guild.id in enabled_servers: await ctx.respond("✅ AI is currently enabled in this server.") else: await ctx.respond("❌ AI is currently disabled in this server.")
+def save_enabled_servers(server_ids): with open(ENABLED_SERVERS_FILE, "w") as f: json.dump(server_ids, f)
 
-@ai_group.command(name="meme", description="Generate an AI meme based on recent messages") async def meme(ctx): await ctx.defer()
+enabled_servers = load_enabled_servers()
 
-if ctx.guild.id not in enabled_servers:
-    await ctx.respond("⚠️ AI is disabled in this server. Use /ai enable to activate it.")
-    return
+Enable AI
 
-# Fetch recent messages
-messages = [message async for message in ctx.channel.history(limit=15) if not message.author.bot]
-recent_text = "\n".join(m.content for m in reversed(messages))
+@slash_command(name="enable-ai", description="Enable AI features in this server") async def enable_ai(ctx): if ctx.guild.id not in enabled_servers: enabled_servers.append(ctx.guild.id) save_enabled_servers(enabled_servers) await ctx.respond("✅ AI features enabled in this server.") else: await ctx.respond("ℹ️ AI features are already enabled.")
 
-# Ask OpenAI to generate a meme caption
-prompt = f"Create a short, funny meme caption based on this conversation:\n{recent_text}"
-print(f"Sending prompt to OpenAI: {prompt}")
+Disable AI
+
+@slash_command(name="disable-ai", description="Disable AI features in this server") async def disable_ai(ctx): if ctx.guild.id in enabled_servers: enabled_servers.remove(ctx.guild.id) save_enabled_servers(enabled_servers) await ctx.respond("🛑 AI features disabled in this server.") else: await ctx.respond("ℹ️ AI features were not enabled.")
+
+AI Status
+
+@slash_command(name="ai-status", description="Check if AI is enabled in this server") async def ai_status(ctx): if ctx.guild.id in enabled_servers: await ctx.respond("✅ AI is enabled in this server.") else: await ctx.respond("❌ AI is not enabled in this server.")
+
+Meme command
+
+@slash_command(name="meme", description="Generate a meme based on recent messages") async def meme(ctx): if ctx.guild.id not in enabled_servers: await ctx.respond("⚠️ AI is not enabled in this server.") return await ctx.defer() channel = ctx.channel messages = [msg async for msg in channel.history(limit=10)] context_text = "\n".join([msg.content for msg in messages if msg.content]) prompt = f"Generate a funny meme idea based on this conversation:\n{context_text}"
 
 try:
-    completion = await openai.ChatCompletion.acreate(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You're a witty meme expert."},
-            {"role": "user", "content": prompt},
-        ]
+    response = openai.Image.create(
+        prompt=prompt,
+        n=1,
+        size="512x512"
     )
-    caption = completion.choices[0].message.content.strip()
+    image_url = response['data'][0]['url']
+    await ctx.respond(f"🖼️ Meme based on chat: {image_url}")
 except Exception as e:
-    await ctx.respond(f"❌ Error generating caption: {e}")
-    return
+    await ctx.respond(f"❌ Failed to generate meme: {e}")
 
-# Generate meme image using DALL-E
-try:
-    image_response = await asyncio.wait_for(
-        openai.Image.acreate(
-            prompt=caption,
-            n=1,
-            size="512x512"
-        ),
-        timeout=30
-    )
-    image_url = image_response["data"][0]["url"]
-except asyncio.TimeoutError:
-    await ctx.respond("⏱️ Image generation took too long. Try again later.")
-    return
-except Exception as e:
-    await ctx.respond(f"❌ Error generating image: {e}")
-    return
+Ask command
 
-embed = discord.Embed(title="🖼️ AI Meme", description=caption)
-embed.set_image(url=image_url)
-await ctx.respond(embed=embed)
+@slash_command(name="ask", description="Ask AI a question") async def ask(ctx, question: Option(str, "What do you want to ask?")): await ctx.defer() try: completion = openai.ChatCompletion.create( model="gpt-3.5-turbo", messages=[{"role": "user", "content": question}] ) reply = completion.choices[0].message.content await ctx.respond(reply) except Exception as e: await ctx.respond(f"❌ Failed to get response: {e}")
 
-Register group
+Generate command
 
-bot.add_application_command(ai_group)
+@slash_command(name="generate", description="Generate creative content (story, idea, etc.)") async def generate(ctx, idea: Option(str, "Describe what to generate")): await ctx.defer() prompt = f"Create something fun or creative based on this: {idea}" try: completion = openai.ChatCompletion.create( model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}] ) result = completion.choices[0].message.content await ctx.respond(result) except Exception as e: await ctx.respond(f"❌ Failed to generate: {e}")
 
-Background replies (optional feature)
+Background Task for smart replies
 
-@tasks.loop(minutes=2) async def auto_reply_loop(): for guild in bot.guilds: if guild.id not in enabled_servers: continue
+@tasks.loop(minutes=2) async def auto_reply(): for guild in bot.guilds: if guild.id not in enabled_servers: continue for channel in guild.text_channels: try: messages = [msg async for msg in channel.history(limit=5)] context = "\n".join([msg.content for msg in messages if msg.content]) if context: prompt = f"Respond cleverly to this conversation:\n{context}" completion = openai.ChatCompletion.create( model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}] ) response = completion.choices[0].message.content await channel.send(response) break except: continue
 
-for channel in guild.text_channels:
-        try:
-            messages = [msg async for msg in channel.history(limit=10) if not msg.author.bot]
-            if not messages:
-                continue
-
-            convo = "\n".join(m.content for m in reversed(messages))
-
-            completion = await openai.ChatCompletion.acreate(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "Be casual and funny, and reply to a chat message."},
-                    {"role": "user", "content": convo},
-                ]
-            )
-            reply = completion.choices[0].message.content.strip()
-            await channel.send(reply)
-            break  # reply in only 1 channel per server
-
-        except Exception as e:
-            print(f"[AutoReply] Error: {e}")
-
-@bot.event async def on_ready(): print(f"✅ Logged in as {bot.user}") auto_reply_loop.start()
+@bot.event async def on_ready(): print(f"✅ Logged in as {bot.user}") auto_reply.start()
 
 bot.run(TOKEN)
 
