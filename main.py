@@ -1,28 +1,25 @@
 import discord
-from discord.ext import commands, tasks
-from discord.commands import SlashCommandGroup
+from discord import app_commands
+from discord.ext import tasks
 import openai
-import random
 import json
 import os
 import asyncio
 from keep_alive import keep_alive
 
-# Load environment variables
-TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
-
-# Set up intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 
-# AI Settings File
+TOKEN = os.getenv("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai.api_key = OPENAI_API_KEY
+
 AI_SETTINGS_FILE = "ai_settings.json"
 
 def load_ai_settings():
@@ -40,39 +37,41 @@ ai_enabled = load_ai_settings()
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user.name}")
+    await tree.sync()
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Slash commands synced")
     auto_ai_loop.start()
 
-# AI Slash Commands Group
-ai = SlashCommandGroup("ai", "AI control commands")
+# AI command group
+ai_group = app_commands.Group(name="ai", description="AI related commands")
 
-@ai.command(name="enable")
-async def enable_ai(ctx):
-    ai_enabled[str(ctx.guild.id)] = True
+@ai_group.command(name="enable", description="Enable AI features in this server")
+async def enable_ai(interaction: discord.Interaction):
+    ai_enabled[str(interaction.guild.id)] = True
     save_ai_settings(ai_enabled)
-    await ctx.respond("✅ AI features have been enabled in this server.")
+    await interaction.response.send_message("✅ AI features enabled in this server.")
 
-@ai.command(name="disable")
-async def disable_ai(ctx):
-    ai_enabled[str(ctx.guild.id)] = False
+@ai_group.command(name="disable", description="Disable AI features in this server")
+async def disable_ai(interaction: discord.Interaction):
+    ai_enabled[str(interaction.guild.id)] = False
     save_ai_settings(ai_enabled)
-    await ctx.respond("❌ AI features have been disabled in this server.")
+    await interaction.response.send_message("❌ AI features disabled in this server.")
 
-@ai.command(name="status")
-async def status_ai(ctx):
-    status = ai_enabled.get(str(ctx.guild.id), False)
-    await ctx.respond(f"🔍 AI is {'enabled' if status else 'disabled'} in this server.")
+@ai_group.command(name="status", description="Check if AI is enabled in this server")
+async def status_ai(interaction: discord.Interaction):
+    status = ai_enabled.get(str(interaction.guild.id), False)
+    await interaction.response.send_message(f"🔍 AI is {'enabled' if status else 'disabled'} in this server.")
 
-@ai.command(name="meme")
-async def meme_ai(ctx):
-    await ctx.defer()
-
-    if not ai_enabled.get(str(ctx.guild.id), False):
-        await ctx.respond("❌ AI is not enabled in this server.")
+@ai_group.command(name="meme", description="Generate a meme based on recent messages")
+async def meme_ai(interaction: discord.Interaction):
+    await interaction.response.defer()
+    if not ai_enabled.get(str(interaction.guild.id), False):
+        await interaction.followup.send("❌ AI is not enabled in this server.")
         return
 
     messages = []
-    async for msg in ctx.channel.history(limit=20):
+    channel = interaction.channel
+    async for msg in channel.history(limit=20):
         if msg.author != bot.user:
             messages.append(f"{msg.author.display_name}: {msg.content}")
 
@@ -83,16 +82,15 @@ async def meme_ai(ctx):
         image_url = dalle_response['data'][0]['url']
         embed = discord.Embed(title="🤣 Meme Generated", color=discord.Color.green())
         embed.set_image(url=image_url)
-        await ctx.respond(embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
-        await ctx.respond(f"⚠️ Failed to generate meme: {e}")
+        await interaction.followup.send(f"⚠️ Failed to generate meme: {e}")
 
-@ai.command(name="ask")
-async def ask_ai(ctx, question: str):
-    await ctx.defer()
-
-    if not ai_enabled.get(str(ctx.guild.id), False):
-        await ctx.respond("❌ AI is not enabled in this server.")
+@ai_group.command(name="ask", description="Ask AI a question")
+async def ask_ai(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    if not ai_enabled.get(str(interaction.guild.id), False):
+        await interaction.followup.send("❌ AI is not enabled in this server.")
         return
 
     try:
@@ -100,16 +98,15 @@ async def ask_ai(ctx, question: str):
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": question}]
         )
-        await ctx.respond(response.choices[0].message.content)
+        await interaction.followup.send(response.choices[0].message.content)
     except Exception as e:
-        await ctx.respond(f"⚠️ Failed to get a reply: {e}")
+        await interaction.followup.send(f"⚠️ Failed to get a reply: {e}")
 
-@ai.command(name="generate")
-async def generate_ai(ctx, idea: str):
-    await ctx.defer()
-
-    if not ai_enabled.get(str(ctx.guild.id), False):
-        await ctx.respond("❌ AI is not enabled in this server.")
+@ai_group.command(name="generate", description="Generate creative content")
+async def generate_ai(interaction: discord.Interaction, idea: str):
+    await interaction.response.defer()
+    if not ai_enabled.get(str(interaction.guild.id), False):
+        await interaction.followup.send("❌ AI is not enabled in this server.")
         return
 
     try:
@@ -117,19 +114,25 @@ async def generate_ai(ctx, idea: str):
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"Write something creative: {idea}"}]
         )
-        await ctx.respond(response.choices[0].message.content)
+        await interaction.followup.send(response.choices[0].message.content)
     except Exception as e:
-        await ctx.respond(f"⚠️ Failed to generate content: {e}")
+        await interaction.followup.send(f"⚠️ Failed to generate content: {e}")
 
-bot.add_application_command(ai)
+tree.add_command(ai_group)
 
-# Periodic AI auto-reply
+@tree.command(name="botcommands", description="Show the list of all bot commands")
+async def botcommands(interaction: discord.Interaction):
+    cmds = []
+    for cmd in tree.walk_commands():
+        cmds.append(f"/{cmd.qualified_name} - {cmd.description}")
+    response = "📜 **Bot Commands:**\n" + "\n".join(cmds)
+    await interaction.response.send_message(response, ephemeral=True)
+
 @tasks.loop(minutes=2)
 async def auto_ai_loop():
     for guild in bot.guilds:
         if not ai_enabled.get(str(guild.id), False):
             continue
-
         for channel in guild.text_channels:
             try:
                 messages = []
@@ -148,10 +151,8 @@ async def auto_ai_loop():
                 reply = response.choices[0].message.content
                 await channel.send(reply)
                 await asyncio.sleep(2)
-
             except Exception:
                 continue
 
-# Start server and bot
 keep_alive()
 bot.run(TOKEN)
