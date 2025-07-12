@@ -6,7 +6,7 @@ import json
 import os
 import asyncio
 import traceback
-from keep_alive import keep_alive  # your own keep alive method or remove if not needed
+from keep_alive import keep_alive  # remove if you don't have this
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -79,8 +79,8 @@ async def meme_ai(interaction: discord.Interaction):
         prompt = "Create a funny Discord meme idea based on this chat:\n" + "\n".join(messages[-10:])
         print(f"[MEME] Prompt:\n{prompt}")
 
-        dalle_response = openai.Image.create(prompt=prompt, n=1, size="512x512")
-        image_url = dalle_response['data'][0]['url']
+        dalle_response = openai.image.create(prompt=prompt, n=1, size="512x512")
+        image_url = dalle_response.data[0].url
         embed = discord.Embed(title="🤣 Meme Generated", color=discord.Color.green())
         embed.set_image(url=image_url)
         await interaction.followup.send(embed=embed)
@@ -100,7 +100,7 @@ async def ask_ai(interaction: discord.Interaction, question: str):
 
     try:
         print(f"[ASK] Question from guild {interaction.guild.id}: {question}")
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": question}]
         )
@@ -122,7 +122,7 @@ async def generate_ai(interaction: discord.Interaction, idea: str):
 
     try:
         print(f"[GENERATE] Idea from guild {interaction.guild.id}: {idea}")
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"Write something creative: {idea}"}]
         )
@@ -161,7 +161,7 @@ async def auto_ai_loop():
                     continue
 
                 prompt = "Reply humorously to this recent Discord chat:\n" + "\n".join(messages[-5:])
-                response = openai.ChatCompletion.create(
+                response = openai.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[{"role": "user", "content": prompt}]
                 )
